@@ -49,6 +49,8 @@ MM.Command.InsertSibling.execute = function() {
 	MM.App.action(action);
 
 	MM.Command.Edit.execute();
+
+	MM.publish("command-sibling");
 }
 
 MM.Command.InsertChild = Object.create(MM.Command, {
@@ -64,6 +66,8 @@ MM.Command.InsertChild.execute = function() {
 	MM.App.action(action);	
 
 	MM.Command.Edit.execute();
+
+	MM.publish("command-child");
 }
 
 MM.Command.Delete = Object.create(MM.Command, {
@@ -188,10 +192,10 @@ MM.Command.UI.execute = function() {
 MM.Command.Pan = Object.create(MM.Command, {
 	label: {value: "Pan the map"},
 	keys: {value: [
-		{keyCode: "W".charCodeAt(0), ctrlKey:false, altKey:false},
-		{keyCode: "A".charCodeAt(0), ctrlKey:false, altKey:false},
-		{keyCode: "S".charCodeAt(0), ctrlKey:false, altKey:false},
-		{keyCode: "D".charCodeAt(0), ctrlKey:false, altKey:false}
+		{keyCode: "W".charCodeAt(0), ctrlKey:false, altKey:false, metaKey:false},
+		{keyCode: "A".charCodeAt(0), ctrlKey:false, altKey:false, metaKey:false},
+		{keyCode: "S".charCodeAt(0), ctrlKey:false, altKey:false, metaKey:false},
+		{keyCode: "D".charCodeAt(0), ctrlKey:false, altKey:false, metaKey:false}
 	]},
 	chars: {value: []}
 });
@@ -260,4 +264,14 @@ MM.Command.Paste = Object.create(MM.Command, {
 });
 MM.Command.Paste.execute = function() {
 	MM.Clipboard.paste(MM.App.current);
+}
+
+MM.Command.Fold = Object.create(MM.Command, {
+	label: {value: "Fold/Unfold"},
+	keys: {value: [{charCode: "f".charCodeAt(0), ctrlKey:false}]}
+});
+MM.Command.Fold.execute = function() {
+	var item = MM.App.current;
+	if (item.isCollapsed()) { item.expand(); } else { item.collapse(); }
+	MM.App.map.ensureItemVisibility(item);
 }

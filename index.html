@@ -8,10 +8,14 @@
 		<script src="my-mind.js"></script>
 		<script src="https://cdn.firebase.com/v0/firebase.js"></script>
 		<script src="https://cdn.firebase.com/v0/firebase-simple-login.js"></script>
+		<link rel="stylesheet" href="css/font.css" />
 		<link rel="stylesheet" href="css/style.css" />
+		<link rel="stylesheet" href="css/print.css" media="print" />
 	</head>
-	<body>
-		<ul id="port"></ul>
+	<body onload="init()">
+		<ul id="port">
+			<div id="tip">Press ‘Tab’ to Insert Child, ‘Enter’ to Insert Sibling Node. For more tips/news, follow <a href="https://twitter.com/my_mind_app">@my_mind_app</a>.</div>
+		</ul>
 		<div id="throbber"></div>
 
 		<div class="ui">
@@ -99,6 +103,12 @@
 				</p>
 			</div>
 
+			<div id="image">
+				<p data-for="save">
+					<button class="go"></button><button class="cancel">Cancel</button>
+				</p>
+			</div>
+
 			<div id="local">
 				<p data-for="load">
 					<span>Saved maps</span>
@@ -139,6 +149,16 @@
 				</p>
 			</div>
 
+			<div id="webdav">
+				<p data-for="save load">
+					<span>URL</span>
+					<input type="text" class="url" />
+				</p>
+				<p data-for="save load">
+					<button class="go"></button><button class="cancel">Cancel</button>
+				</p>
+			</div>
+
 			<div id="gdrive">
 				<p data-for="save">
 					<span>Format</span>
@@ -167,8 +187,10 @@
 		</div>
 
 		<script>
-			MM.App.init();
-			MM.App.io.restore();
+			var init = function() {
+				MM.App.init();
+				MM.App.io.restore();
+			}
 		</script>
 
 		<script>
@@ -181,13 +203,8 @@
 		</script>
 
 <!--
-#6590C1
-#B4CDE6
-#EEEEEC
-
 TODO:
   shortterm:
-    - logo
 
   longterm:
     - firebase realtime

@@ -80,6 +80,11 @@ MM.App = {
 			case "resize":
 				this._syncPort();
 			break;
+
+			case "beforeunload":
+				e.preventDefault();
+				return "";
+			break;
 		}
 	},
 	
@@ -94,10 +99,12 @@ MM.App = {
 		this.io = new MM.UI.IO();
 		this.help = new MM.UI.Help();
 
+		MM.Tip.init();
 		MM.Keyboard.init();
 		MM.Mouse.init(this._port);
 
 		window.addEventListener("resize", this);
+		window.addEventListener("beforeunload", this);
 		MM.subscribe("ui-change", this);
 		MM.subscribe("item-change", this);
 		

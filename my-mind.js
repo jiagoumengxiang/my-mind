@@ -102,6 +102,22 @@ Promise.prototype.reject = function(value) {
 	return this;
 }
 
+/**
+ * Pass this promise's resolved value to another promise
+ * @param {Promise} promise
+ */
+Promise.prototype.chain = function(promise) {
+	return this.then(promise.fulfill.bind(promise), promise.reject.bind(promise));
+}
+
+/**
+ * @param {function} onRejected To be called once this promise gets rejected
+ * @returns {Promise}
+ */
+Promise.prototype["catch"] = function(onRejected) {
+	return this.then(null, onRejected);
+}
+
 Promise.prototype._processQueue = function() {
 	while (this._thenPromises.length) {
 		var onFulfilled = this._cb.fulfilled.shift();
@@ -263,6 +279,7 @@ MM.Repo = {
 MM.Item = function() {
 	this._parent = null;
 	this._children = [];
+	this._collapsed = false;
 
 	this._layout = null;
 	this._shape = null;
@@ -286,6 +303,7 @@ MM.Item = function() {
 		value: document.createElement("span"),
 		text: document.createElement("div"),
 		children: document.createElement("ul"),
+		toggle: document.createElement("div"),
 		canvas: document.createElement("canvas")
 	}
 	this._dom.node.classList.add("item");
@@ -293,10 +311,15 @@ MM.Item = function() {
 	this._dom.status.classList.add("status");
 	this._dom.value.classList.add("value");
 	this._dom.text.classList.add("text");
+	this._dom.toggle.classList.add("toggle");
 	this._dom.children.classList.add("children");
+
 	this._dom.content.appendChild(this._dom.text); /* status+value are appended in layout */
 	this._dom.node.appendChild(this._dom.canvas);
 	this._dom.node.appendChild(this._dom.content);
+	/* toggle+children are appended when children exist */
+
+	this._dom.toggle.addEventListener("click", this);
 }
 
 MM.Item.COLOR = "#999";
@@ -326,8 +349,8 @@ MM.Item.prototype.fromJSON = function(data) {
 	if (data.color) { this._color = data.color; }
 	if (data.value) { this._value = data.value; }
 	if (data.status) { this._status = data.status; }
+	if (data.collapsed) { this.collapse(); }
 	if (data.layout) { this._layout = MM.Layout.getById(data.layout); }
-	if (data.shape) { this.setShape(MM.Shape.getById(data.shape)); }
 	if (data.shape) { this.setShape(MM.Shape.getById(data.shape)); }
 
 	(data.children || []).forEach(function(child) {
@@ -349,6 +372,7 @@ MM.Item.prototype.toJSON = function() {
 	if (this._status) { data.status = this._status; }
 	if (this._layout) { data.layout = this._layout.id; }
 	if (!this._autoShape) { data.shape = this._shape.id; }
+	if (this._collapsed) { data.collapsed = 1; }
 	if (this._children.length) {
 		data.children = this._children.map(function(child) { return child.toJSON(); });
 	}
@@ -385,6 +409,9 @@ MM.Item.prototype.update = function(doNotRecurse) {
 	
 	this._updateStatus();
 	this._updateValue();
+
+	this._dom.node.classList[this._collapsed ? "add" : "remove"]("collapsed");
+
 	this.getLayout().update(this);
 	this.getShape().update(this);
 	if (!this.isRoot() && !doNotRecurse) { this._parent.update(); }
@@ -407,6 +434,23 @@ MM.Item.prototype.setText = function(text) {
 
 MM.Item.prototype.getText = function() {
 	return this._dom.text.innerHTML.replace(/<br\s*\/?>/g, "\n");
+}
+
+MM.Item.prototype.collapse = function() {
+	if (this._collapsed) { return; }
+	this._collapsed = true;
+	return this.update();
+}
+
+MM.Item.prototype.expand = function() {
+	if (!this._collapsed) { return; }
+	this._collapsed = false;
+	this.update();
+	return this.updateSubtree();
+}
+
+MM.Item.prototype.isCollapsed = function() {
+	return this._collapsed;
 }
 
 MM.Item.prototype.setValue = function(value) {
@@ -534,6 +578,7 @@ MM.Item.prototype.insertChild = function(child, index) {
 	}
 
 	if (!this._children.length) {
+		this._dom.node.appendChild(this._dom.toggle);
 		this._dom.node.appendChild(this._dom.children);
 	}
 
@@ -556,6 +601,7 @@ MM.Item.prototype.removeChild = function(child) {
 	child.setParent(null);
 	
 	if (!this._children.length) {
+		this._dom.toggle.parentNode.removeChild(this._dom.toggle);
 		this._dom.children.parentNode.removeChild(this._dom.children);
 	}
 	
@@ -593,6 +639,11 @@ MM.Item.prototype.handleEvent = function(e) {
 
 		case "keydown":
 			if (e.keyCode == 9) { e.preventDefault(); } /* TAB has a special meaning in this app, do not use it to change focus */
+		break;
+
+		case "click":
+			if (this._collapsed) { this.expand(); } else { this.collapse(); }
+			MM.App.select(this);
 		break;
 	}
 }
@@ -810,7 +861,7 @@ MM.Map.prototype.getClosestItem = function(x, y) {
 			dx: dx,
 			dy: dy
 		});
-		item.getChildren().forEach(scan);
+		if (!item.isCollapsed()) { item.getChildren().forEach(scan); }
 	}
 	
 	scan(this._root);
@@ -901,9 +952,11 @@ MM.Map.prototype.pick = function(item, direction) {
 }
 
 MM.Map.prototype._getPickCandidates = function(currentRect, item, direction, candidates) {
-	item.getChildren().forEach(function(child) {
-		this._getPickCandidates(currentRect, child, direction, candidates);
-	}, this);
+	if (!item.isCollapsed()) {
+		item.getChildren().forEach(function(child) {
+			this._getPickCandidates(currentRect, child, direction, candidates);
+		}, this);
+	}
 
 	var node = item.getDOM().content;
 	var rect = node.getBoundingClientRect();
@@ -955,7 +1008,7 @@ MM.Keyboard.init = function() {
 
 MM.Keyboard.handleEvent = function(e) {
 	var node = document.activeElement;
-	while (node != document) {
+	while (node && node != document) {
 		if (node.classList.contains("ui")) { return; }
 		node = node.parentNode;
 	}
@@ -983,6 +1036,34 @@ MM.Keyboard._keyOK = function(key, e) {
 	}
 	return true;
 }
+MM.Tip = {
+	_node: null,
+
+	handleEvent: function() {
+		this._hide();
+	},
+
+	handleMessage: function() {
+		this._hide();
+	},
+
+	init: function() {
+		this._node = document.querySelector("#tip");
+		this._node.addEventListener("click", this);
+
+		MM.subscribe("command-child", this);
+		MM.subscribe("command-sibling", this);
+	},
+
+	_hide: function() {
+		MM.unsubscribe("command-child", this);
+		MM.unsubscribe("command-sibling", this);
+
+		this._node.removeEventListener("click", this);
+		this._node.classList.add("hidden");
+		this._node = null;
+	}
+}
 MM.Action = function() {}
 MM.Action.prototype.perform = function() {}
 MM.Action.prototype.undo = function() {}
@@ -994,6 +1075,7 @@ MM.Action.InsertNewItem = function(parent, index) {
 }
 MM.Action.InsertNewItem.prototype = Object.create(MM.Action.prototype);
 MM.Action.InsertNewItem.prototype.perform = function() {
+	this._parent.expand(); /* FIXME remember? */
 	this._item = this._parent.insertChild(this._item, this._index);
 	MM.App.select(this._item);
 }
@@ -1282,6 +1364,8 @@ MM.Command.InsertSibling.execute = function() {
 	MM.App.action(action);
 
 	MM.Command.Edit.execute();
+
+	MM.publish("command-sibling");
 }
 
 MM.Command.InsertChild = Object.create(MM.Command, {
@@ -1297,6 +1381,8 @@ MM.Command.InsertChild.execute = function() {
 	MM.App.action(action);	
 
 	MM.Command.Edit.execute();
+
+	MM.publish("command-child");
 }
 
 MM.Command.Delete = Object.create(MM.Command, {
@@ -1421,10 +1507,10 @@ MM.Command.UI.execute = function() {
 MM.Command.Pan = Object.create(MM.Command, {
 	label: {value: "Pan the map"},
 	keys: {value: [
-		{keyCode: "W".charCodeAt(0), ctrlKey:false, altKey:false},
-		{keyCode: "A".charCodeAt(0), ctrlKey:false, altKey:false},
-		{keyCode: "S".charCodeAt(0), ctrlKey:false, altKey:false},
-		{keyCode: "D".charCodeAt(0), ctrlKey:false, altKey:false}
+		{keyCode: "W".charCodeAt(0), ctrlKey:false, altKey:false, metaKey:false},
+		{keyCode: "A".charCodeAt(0), ctrlKey:false, altKey:false, metaKey:false},
+		{keyCode: "S".charCodeAt(0), ctrlKey:false, altKey:false, metaKey:false},
+		{keyCode: "D".charCodeAt(0), ctrlKey:false, altKey:false, metaKey:false}
 	]},
 	chars: {value: []}
 });
@@ -1493,6 +1579,16 @@ MM.Command.Paste = Object.create(MM.Command, {
 });
 MM.Command.Paste.execute = function() {
 	MM.Clipboard.paste(MM.App.current);
+}
+
+MM.Command.Fold = Object.create(MM.Command, {
+	label: {value: "Fold/Unfold"},
+	keys: {value: [{charCode: "f".charCodeAt(0), ctrlKey:false}]}
+});
+MM.Command.Fold.execute = function() {
+	var item = MM.App.current;
+	if (item.isCollapsed()) { item.expand(); } else { item.collapse(); }
+	MM.App.map.ensureItemVisibility(item);
 }
 MM.Command.Edit = Object.create(MM.Command, {
 	label: {value: "Edit item"},
@@ -1719,10 +1815,12 @@ MM.Layout.pick = function(item, dir) {
 	}
 	
 	/* direction for a child */
-	var children = item.getChildren();
-	for (var i=0;i<children.length;i++) {
-		var child = children[i];
-		if (this.getChildDirection(child) == dir) { return child; }
+	if (!item.isCollapsed()) {
+		var children = item.getChildren();
+		for (var i=0;i<children.length;i++) {
+			var child = children[i];
+			if (this.getChildDirection(child) == dir) { return child; }
+		}
 	}
 
 	if (item.isRoot()) { return item; }
@@ -1755,6 +1853,37 @@ MM.Layout._anchorCanvas = function(item) {
 	var dom = item.getDOM();
 	dom.canvas.width = dom.node.offsetWidth;
 	dom.canvas.height = dom.node.offsetHeight;
+}
+
+MM.Layout._anchorToggle = function(item, x, y, side) {
+	var node = item.getDOM().toggle;
+	var w = node.offsetWidth;
+	var h = node.offsetHeight;
+	var l = x;
+	var t = y;
+
+	switch (side) {
+		case "left":
+			t -= h/2;
+			l -= w;
+		break;
+
+		case "right":
+			t -= h/2;
+		break;
+		
+		case "top":
+			l -= w/2;
+			t -= h;
+		break;
+
+		case "bottom":
+			l -= w/2;
+		break;
+	}
+	
+	node.style.left = Math.round(l) + "px";
+	node.style.top = Math.round(t) + "px";
 }
 
 MM.Layout._getChildAnchor = function(item, side) {
@@ -1827,11 +1956,13 @@ MM.Layout.Graph.update = function(item) {
 	this._alignItem(item, side);
 
 	this._layoutItem(item, this.childDirection);
+
 	if (this.childDirection == "left" || this.childDirection == "right") {
 		this._drawLinesHorizontal(item, this.childDirection);
 	} else {
 		this._drawLinesVertical(item, this.childDirection);
 	}
+
 	return this;
 }
 
@@ -1927,10 +2058,13 @@ MM.Layout.Graph._drawHorizontalConnectors = function(item, side, children) {
 	/* first part */
 	var y1 = item.getShape().getVerticalAnchor(item);
 	if (side == "left") {
-		var x1 = dom.content.offsetLeft + 0.5;
+		var x1 = dom.content.offsetLeft - 0.5;
 	} else {
 		var x1 = dom.content.offsetWidth + dom.content.offsetLeft + 0.5;
 	}
+	
+	this._anchorToggle(item, x1, y1, side);
+	if (item.isCollapsed()) { return; }
 
 	if (children.length == 1) {
 		var child = children[0];
@@ -1957,8 +2091,8 @@ MM.Layout.Graph._drawHorizontalConnectors = function(item, side, children) {
 	/* rounded connectors */
 	var c1 = children[0];
 	var c2 = children[children.length-1];
-	var offset = dom.content.offsetWidth + R;
-	var x = x2;
+ 	var x = x2;
+ 	var xx = x + (side == "left" ? -R : R);
 
 	var y1 = c1.getShape().getVerticalAnchor(c1) + c1.getDOM().node.offsetTop;
 	var y2 = c2.getShape().getVerticalAnchor(c2) + c2.getDOM().node.offsetTop;
@@ -1967,9 +2101,10 @@ MM.Layout.Graph._drawHorizontalConnectors = function(item, side, children) {
 
 	ctx.beginPath();
 	ctx.moveTo(x1, y1);
+	ctx.lineTo(xx, y1)
 	ctx.arcTo(x, y1, x, y1+R, R);
 	ctx.lineTo(x, y2-R);
-	ctx.arcTo(x, y2, x2, y2, R);
+	ctx.arcTo(x, y2, xx, y2, R);
 	ctx.lineTo(x2, y2);
 
 	for (var i=1; i<children.length-1; i++) {
@@ -1998,15 +2133,18 @@ MM.Layout.Graph._drawVerticalConnectors = function(item, side, children) {
 	if (side == "top") {
 		var y1 = canvas.height - dom.content.offsetHeight;
 		var y2 = y1 - height;
+		this._anchorToggle(item, x, y1, side);
 	} else {
 		var y1 = item.getShape().getVerticalAnchor(item);
 		var y2 = dom.content.offsetHeight + height;
+		this._anchorToggle(item, x, dom.content.offsetHeight, side);
 	}
 
 	ctx.beginPath();
 	ctx.moveTo(x, y1);
 	ctx.lineTo(x, y2);
 	ctx.stroke();
+
 
 	if (children.length == 1) { return; }
 
@@ -2125,18 +2263,20 @@ MM.Layout.Tree._layoutChildren = function(children, rankDirection, offset, bbox)
 }
 
 MM.Layout.Tree._drawLines = function(item, side) {
-	var children = item.getChildren();
-	if (children.length == 0) { return; }
-
 	var dom = item.getDOM();
 	var canvas = dom.canvas;
-	var ctx = canvas.getContext("2d");
-	ctx.strokeStyle = item.getColor();
 
 	var R = this.SPACING_RANK/4;
 	var x = (side == "left" ? canvas.width - 2*R : 2*R) + 0.5;
-	var y1 = item.getShape().getVerticalAnchor(item);
+	this._anchorToggle(item, x, dom.content.offsetHeight, "bottom");
 
+	var children = item.getChildren();
+	if (children.length == 0 || item.isCollapsed()) { return; }
+
+	var ctx = canvas.getContext("2d");
+	ctx.strokeStyle = item.getColor();
+
+	var y1 = item.getShape().getVerticalAnchor(item);
 	var last = children[children.length-1];
 	var y2 = last.getShape().getVerticalAnchor(last) + last.getDOM().node.offsetTop;
 
@@ -2266,7 +2406,7 @@ MM.Layout.Map._layoutRoot = function(item) {
 }
 
 MM.Layout.Map._drawRootConnectors = function(item, side, children) {
-	if (children.length == 0) { return; }
+	if (children.length == 0 || item.isCollapsed()) { return; }
 
 	var dom = item.getDOM();
 	var canvas = dom.canvas;
@@ -2361,18 +2501,18 @@ MM.Shape.Ellipse = Object.create(MM.Shape, {
 });
 MM.Format = Object.create(MM.Repo, {
 	extension: {value:""},
-	mime: {value:"text/plain"}
+	mime: {value:""}
 });
 
 MM.Format.getByName = function(name) {
 	var index = name.lastIndexOf(".");
-	var result = MM.Format.JSON;
-	if (index > -1) { 
-		var extension = name.substring(index+1).toLowerCase(); 
-		var format = this.getByProperty("extension", extension);
-		if (format) { result = format; }
-	}
-	return result;
+	if (index == -1) { return null; }
+	var extension = name.substring(index+1).toLowerCase(); 
+	return this.getByProperty("extension", extension);
+}
+
+MM.Format.getByMime = function(mime) {
+	return this.getByProperty("mime", mime);
 }
 
 MM.Format.to = function(data) {}
@@ -2381,7 +2521,7 @@ MM.Format.JSON = Object.create(MM.Format, {
 	id: {value: "json"},
 	label: {value: "Native (JSON)"},
 	extension: {value: "mymind"},
-	mime: {value: "application/json"}
+	mime: {value: "application/vnd.mymind+json"}
 });
 
 MM.Format.JSON.to = function(data) { 
@@ -2395,7 +2535,7 @@ MM.Format.FreeMind = Object.create(MM.Format, {
 	id: {value: "freemind"},
 	label: {value: "FreeMind"},
 	extension: {value: "mm"},
-	mime: {value: "application/xml"}
+	mime: {value: "application/x-freemind"}
 });
 
 MM.Format.FreeMind.to = function(data) { 
@@ -2444,6 +2584,7 @@ MM.Format.FreeMind._serializeAttributes = function(doc, json) {
 
 	if (json.side) { elm.setAttribute("POSITION", json.side); }
 	if (json.shape == "box") { elm.setAttribute("STYLE", "bubble"); }
+	if (json.collapsed) { elm.setAttribute("FOLDED", "true"); }
 
 	return elm;
 }
@@ -2478,13 +2619,33 @@ MM.Format.FreeMind._parseAttributes = function(node, parent) {
 		json.shape = parent.shape;
 	}
 
+	if (node.getAttribute("FOLDED") == "true") { json.collapsed = 1; }
+
+	var children = node.children;
+	for (var i=0;i<children.length;i++) {
+		var child = children[i];
+		switch (child.nodeName.toLowerCase()) {
+			case "richcontent":
+				var body = child.querySelector("body > *");
+				if (body) {
+					var serializer = new XMLSerializer();
+					json.text = serializer.serializeToString(body).trim();
+				}
+			break;
+
+			case "font":
+				if (child.getAttribute("ITALIC") == "true") { json.text = "<i>" + json.text + "</i>"; }
+				if (child.getAttribute("BOLD") == "true") { json.text = "<b>" + json.text + "</b>"; }
+			break;
+		}
+	}
+
 	return json;
 }
 MM.Format.MMA = Object.create(MM.Format.FreeMind, {
 	id: {value: "mma"},
 	label: {value: "Mind Map Architect"},
-	extension: {value: "mma"},
-	mime: {value: "application/xml"}
+	extension: {value: "mma"}
 });
 
 MM.Format.MMA._parseAttributes = function(node, parent) {
@@ -2493,6 +2654,8 @@ MM.Format.MMA._parseAttributes = function(node, parent) {
 		text: node.getAttribute("title") || "",
 		shape: "box"
 	};
+
+	if (node.getAttribute("expand") == "false") { json.collapsed = 1; }
 
 	var direction = node.getAttribute("direction");
 	if (direction == "0") { json.side = "left"; }
@@ -2519,6 +2682,7 @@ MM.Format.MMA._parseAttributes = function(node, parent) {
 MM.Format.MMA._serializeAttributes = function(doc, json) {
 	var elm = doc.createElement("node");
 	elm.setAttribute("title", json.text);
+	elm.setAttribute("expand", json.collapsed ? "false" : "true");
 
 	if (json.side) { elm.setAttribute("direction", json.side == "left" ? "0" : "1"); }
 	if (json.color) {
@@ -2534,8 +2698,7 @@ MM.Format.MMA._serializeAttributes = function(doc, json) {
 MM.Format.Mup = Object.create(MM.Format, {
 	id: {value: "mup"},
 	label: {value: "MindMup"},
-	extension: {value: "mup"},
-	mime: {value: "application/json"}
+	extension: {value: "mup"}
 });
 
 MM.Format.Mup.to = function(data) {
@@ -2566,6 +2729,10 @@ MM.Format.Mup._MupToMM = function(item) {
 		json.color = item.attr.style.background;
 	}
 
+	if (item.attr && item.attr.collapsed) {
+		json.collapsed = 1;
+	}
+
 	if (item.ideas) {
 		var data = [];
 		for (var key in item.ideas) {
@@ -2591,10 +2758,14 @@ MM.Format.Mup._MupToMM = function(item) {
 MM.Format.Mup._MMtoMup = function(item, side) {
 	var result = {
 		id: item.id,
-		title: item.text
+		title: item.text,
+		attr: {}
 	}
 	if (item.color) {
-		result.attr = {style:{background:item.color}};
+		result.attr.style = {background:item.color};
+	}
+	if (item.collapsed) {
+		result.attr.collapsed = true;
 	}
 
 	if (item.children) {
@@ -2664,10 +2835,64 @@ MM.Backend.Local.list = function() {
 		return {};
 	}
 }
+MM.Backend.WebDAV = Object.create(MM.Backend, {
+	id: {value: "webdav"},
+	label: {value: "Generic WebDAV"}
+});
+
+MM.Backend.WebDAV.save = function(data, url) {
+	return this._request("post", url, data);
+}
+
+MM.Backend.WebDAV.load = function(url) {
+	return this._request("get", url);
+}
+
+MM.Backend.WebDAV._request = function(method, url, data) {
+	var xhr = new XMLHttpRequest();
+	xhr.open(method, url, true);
+	xhr.withCredentials = true;
+
+	var promise = new Promise();
+	
+	Promise.send(xhr, data).then(
+		function(xhr) { promise.fulfill(xhr.responseText); },
+		function(xhr) { promise.reject(new Error("HTTP/" + xhr.status + "\n\n" + xhr.responseText)); }
+	);
+	
+	return promise;
+}
+MM.Backend.Image = Object.create(MM.Backend, {
+	id: {value: "image"},
+	label: {value: "Image"},
+	url: {value:"", writable:true}
+});
+
+MM.Backend.Image.save = function(data, name) {
+	var form = document.createElement("form");
+	form.action = this.url;
+	form.method = "post";
+	form.target = "_blank";
+
+	var input = document.createElement("input");
+	input.type = "hidden";
+	input.name = "data";
+	input.value = data;
+	form.appendChild(input);
+
+	var input = document.createElement("input");
+	input.type = "hidden";
+	input.name = "name";
+	input.value = name;
+	form.appendChild(input);
+
+	document.body.appendChild(form);
+	form.submit();
+	form.parentNode.removeChild(form);
+}
 MM.Backend.File = Object.create(MM.Backend, {
 	id: {value: "file"},
 	label: {value: "File"},
-	name: {value:"", writable:true},
 	input: {value:document.createElement("input")}
 });
 
@@ -2692,10 +2917,8 @@ MM.Backend.File.load = function() {
 		var file = e.target.files[0];
 		if (!file) { return; }
 
-		this.name = file.name;
-
 		var reader = new FileReader();
-		reader.onload = function() { promise.fulfill(reader.result); }
+		reader.onload = function() { promise.fulfill({data:reader.result, name:file.name}); }
 		reader.onerror = function() { promise.reject(reader.error); }
 		reader.readAsText(file);
 	}.bind(this);
@@ -2796,8 +3019,7 @@ MM.Backend.GDrive = Object.create(MM.Backend, {
 	scope: {value: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/drive.install"},
 	clientId: {value: "767837575056-h87qmlhmhb3djhaaqta5gv2v3koa9hii.apps.googleusercontent.com"},
 	apiKey: {value: "AIzaSyCzu1qVxlgufneOYpBgDJXN6Z9SNVcHYWM"},
-	fileId: {value: null, writable: true},
-	name: {value: "", writable: true}
+	fileId: {value: null, writable: true}
 });
 
 MM.Backend.GDrive.reset = function() {
@@ -2805,7 +3027,6 @@ MM.Backend.GDrive.reset = function() {
 }
 
 MM.Backend.GDrive.save = function(data, name, mime) {
-	console.log(data, name, mime);
 	return this._connect().then(
 		function() {
 			return this._send(data, name, mime);
@@ -2815,6 +3036,7 @@ MM.Backend.GDrive.save = function(data, name, mime) {
 
 MM.Backend.GDrive._send = function(data, name, mime) {
 	var promise = new Promise();
+
 	var path = "/upload/drive/v2/files";
 	var method = "POST";
 	if (this.fileId) {
@@ -2822,13 +3044,25 @@ MM.Backend.GDrive._send = function(data, name, mime) {
 		method = "PUT";
 	}
 
+	var boundary = "b" + Math.random();
+	var delimiter = "--" + boundary;
+	var body = [
+		delimiter,
+		"Content-Type: application/json", "",
+		JSON.stringify({title:name}),
+		delimiter,
+		"Content-Type: " + mime, "",
+		data,
+		delimiter + "--"
+	].join("\r\n");
+
 	var request = gapi.client.request({
 		path: path,
 		method: method,
 		headers: {
-			"Content-Type": mime
+			"Content-Type": "multipart/mixed; boundary='" + boundary + "'"
 		},
-		body: data
+		body: body
 	});
 
 	request.execute(function(response) {
@@ -2838,39 +3072,9 @@ MM.Backend.GDrive._send = function(data, name, mime) {
 			promise.reject(response.error);
 		} else {
 			this.fileId = response.id;
-			this._sendMetadata(name).then(
-				promise.fulfill.bind(promise),
-				promise.reject.bind(promise)
-			);
+			promise.fulfill();
 		}
 	}.bind(this));
-	
-	return promise;
-}
-
-MM.Backend.GDrive._sendMetadata = function(name) {
-	var promise = new Promise();
-
-	var data = {
-		title: name
-	}
-
-	var request = gapi.client.request({
-		path: "/drive/v2/files/" + this.fileId,
-		method: "PUT",
-		headers: {
-			"Content-Type": "application/json"
-		},
-		body: JSON.stringify(data)
-	});
-
-	request.execute(function(response) {
-		if (response) {
-			promise.fulfill();
-		} else {
-			promise.reject(new Error("Failed to upload to Google Drive"));
-		}
-	});
 	
 	return promise;
 }
@@ -2893,12 +3097,11 @@ MM.Backend.GDrive._load = function(id) {
 
 	request.execute(function(response) {
 		if (response && response.downloadUrl) {
-			this.name = response.title;
 			var xhr = new XMLHttpRequest();
 			xhr.open("get", response.downloadUrl, true);
 			xhr.setRequestHeader("Authorization", "Bearer " + gapi.auth.getToken().access_token);
 			Promise.send(xhr).then(
-				function(xhr) { promise.fulfill(xhr.responseText); },
+				function(xhr) { promise.fulfill({data:xhr.responseText, name:response.title, mime:response.mimeType}); },
 				function(xhr) { promise.reject(xhr.responseText); }
 			);
 		} else {
@@ -2919,9 +3122,14 @@ MM.Backend.GDrive._pick = function() {
 	var promise = new Promise();
 
 	var token = gapi.auth.getToken();
+	var formats = MM.Format.getAll();
+	var mimeTypes = ["application/json; charset=UTF-8", "application/json"];
+	formats.forEach(function(format) {
+		if (format.mime) { mimeTypes.unshift(format.mime); }
+	});
 
 	var view = new google.picker.DocsView(google.picker.ViewId.DOCS)
-//		.setMimeTypes("application/json")
+		.setMimeTypes(mimeTypes.join(","))
 		.setMode(google.picker.DocsViewMode.LIST);
 
 	var picker = new google.picker.PickerBuilder()
@@ -3012,7 +3220,6 @@ MM.UI = function() {
 MM.UI.prototype.handleMessage = function(message, publisher) {
 	switch (message) {
 		case "item-select":
-			document.activeElement.blur(); /* blur the panel FIXME only if activeElement is in the UI? */
 			this._update();
 		break;
 
@@ -3226,6 +3433,7 @@ MM.UI.Help.prototype._build = function() {
 	this._buildRow(t, "SelectParent");
 	this._buildRow(t, "Center");
 	this._buildRow(t, "ZoomIn", "ZoomOut");
+	this._buildRow(t, "Fold");
 
 	var t = this._node.querySelector(".manipulation");
 	this._buildRow(t, "InsertSibling");
@@ -3295,7 +3503,7 @@ MM.UI.IO = function() {
 	this._backend = this._node.querySelector("#backend");
 	this._currentBackend = null;
 	this._backends = {};
-	var ids = ["local", "firebase", "gdrive", "file"];
+	var ids = ["local", "firebase", "gdrive", "file", "webdav", "image"];
 	ids.forEach(function(id) {
 		var ui = MM.UI.Backend.getById(id);
 		ui.init(this._backend);
@@ -3316,6 +3524,12 @@ MM.UI.IO.prototype.restore = function() {
 		var keyvalue = item.split("=");
 		parts[decodeURIComponent(keyvalue[0])] = decodeURIComponent(keyvalue[1]);
 	});
+	
+	/* backwards compatibility */
+	if ("map" in parts) { parts.url = parts.map; }
+
+	/* just URL means webdav backend */
+	if ("url" in parts && !("b" in parts)) { parts.b = "webdav"; }
 
 	var backend = MM.UI.Backend.getById(parts.b);
 	if (backend) { /* saved backend info */
@@ -3337,19 +3551,6 @@ MM.UI.IO.prototype.restore = function() {
 			}
 			return;
 		} catch (e) { }
-	}
-
-	if (parts.map) { /* opened with a URL link */
-		var xhr = new XMLHttpRequest();
-		xhr.open("get", parts.map, true);
-		Promise.send(xhr).then(
-			function(xhr) {
-				var json = MM.Format.JSON.from(xhr.responseText);
-				var map = MM.Map.fromJSON(json);
-				MM.App.setMap(map);
-			}
-		);
-		return;
 	}
 }
 
@@ -3378,7 +3579,7 @@ MM.UI.IO.prototype.show = function(mode) {
 
 MM.UI.IO.prototype.hide = function() {
 	this._node.classList.remove("visible");
-	document.activeElement.blur();
+	document.activeElement && document.activeElement.blur();
 	window.removeEventListener("keydown", this);
 }
 
@@ -3426,7 +3627,6 @@ MM.UI.IO.prototype._updateURL = function() {
 	if (!data) {
 		history.replaceState(null, "", ".");
 	} else {
-		data.b = this._currentBackend.id;
 		var arr = Object.keys(data).map(function(key) {
 			return encodeURIComponent(key)+"="+encodeURIComponent(data[key]);
 		});
@@ -3592,14 +3792,98 @@ MM.UI.Backend.File.load = function() {
 
 MM.UI.Backend.File._loadDone = function(data) {
 	try {
-		var format = MM.Format.getByName(this._backend.name);
-		var json = format.from(data);
+		var format = MM.Format.getByName(data.name) || MM.Format.JSON;
+		var json = format.from(data.data);
 	} catch (e) { 
 		this._error(e);
 	}
 
 	MM.UI.Backend._loadDone.call(this, json);
 }
+MM.UI.Backend.WebDAV = Object.create(MM.UI.Backend, {
+	id: {value: "webdav"}
+});
+
+MM.UI.Backend.WebDAV.init = function(select) {
+	MM.UI.Backend.init.call(this, select);
+
+	this._url = this._node.querySelector(".url");
+	this._url.value = localStorage.getItem(this._prefix + "url") || "";
+	
+	this._current = "";
+}
+
+MM.UI.Backend.WebDAV.getState = function() {
+	var data = {
+		url: this._current
+	};
+	return data;
+}
+
+MM.UI.Backend.WebDAV.setState = function(data) {
+	this._load(data.url);
+}
+
+MM.UI.Backend.WebDAV.save = function() {
+	MM.App.setThrobber(true);
+
+	var map = MM.App.map;
+	var url = this._url.value;
+	localStorage.setItem(this._prefix + "url", url);
+
+	if (url.charCodeAt(url.length-1) != "/") { url += "/"; }
+	url += map.getName() + "." + MM.Format.JSON.extension;
+
+	this._current = url;
+	var json = map.toJSON();
+	var data = MM.Format.JSON.to(json);
+
+	this._backend.save(data, url).then(
+		this._saveDone.bind(this),
+		this._error.bind(this)
+	);
+}
+
+MM.UI.Backend.WebDAV.load = function() {
+	this._load(this._url.value);
+}
+
+MM.UI.Backend.WebDAV._load = function(url) {
+	this._current = url;
+	MM.App.setThrobber(true);
+
+	var lastIndex = url.lastIndexOf("/");
+	this._url.value = url.substring(0, lastIndex);
+	localStorage.setItem(this._prefix + "url", this._url.value);
+
+	this._backend.load(url).then(
+		this._loadDone.bind(this),
+		this._error.bind(this)
+	);
+}
+
+MM.UI.Backend.WebDAV._loadDone = function(data) {
+	try {
+		var json = MM.Format.JSON.from(data);
+	} catch (e) { 
+		this._error(e);
+	}
+
+	MM.UI.Backend._loadDone.call(this, json);
+}
+MM.UI.Backend.Image = Object.create(MM.UI.Backend, {
+	id: {value: "image"}
+});
+
+MM.UI.Backend.Image.save = function() {
+	var name = MM.App.map.getName();
+	var json = MM.App.map.toJSON();
+	var data = MM.Format.JSON.to(json);
+
+	this._backend.save(data, name);
+}
+
+MM.UI.Backend.Image.load = null;
 MM.UI.Backend.Local = Object.create(MM.UI.Backend, {
 	id: {value: "local"}
 });
@@ -3653,6 +3937,7 @@ MM.UI.Backend.Local.setState = function(data) {
 
 MM.UI.Backend.Local.getState = function() {
 	var data = {
+		b: this.id,
 		id: MM.App.map.getId()
 	};
 	return data;
@@ -3715,6 +4000,7 @@ MM.UI.Backend.Firebase.setState = function(data) {
 MM.UI.Backend.Firebase.getState = function() {
 	var data = {
 		id: MM.App.map.getId(),
+		b: this.id,
 		s: this._server.value
 	};
 	if (this._auth.value) { data.a = this._auth.value; }
@@ -3853,9 +4139,16 @@ MM.UI.Backend.GDrive.save = function() {
 	var format = MM.Format.getById(this._format.value);
 	var json = MM.App.map.toJSON();
 	var data = format.to(json);
-	var name = MM.App.map.getName() + "." + format.extension;
+	var name = MM.App.map.getName();
+	var mime = "text/plain";
 	
-	this._backend.save(data, name, format.mime).then(
+	if (format.mime) {
+		mime = format.mime;
+	} else {
+		name += "." + format.extension;
+	}
+
+	this._backend.save(data, name, mime).then(
 		this._saveDone.bind(this),
 		this._error.bind(this)
 	);
@@ -3888,6 +4181,7 @@ MM.UI.Backend.GDrive.setState = function(data) {
 
 MM.UI.Backend.GDrive.getState = function() {
 	var data = {
+		b: this.id,
 		id: this._backend.fileId
 	};
 	return data;
@@ -3895,8 +4189,8 @@ MM.UI.Backend.GDrive.getState = function() {
 
 MM.UI.Backend.GDrive._loadDone = function(data) {
 	try {
-		var format = MM.Format.getByName(this._backend.name);
-		var json = format.from(data);
+		var format = MM.Format.getByMime(data.mime) || MM.Format.getByName(data.name) || MM.Format.JSON;
+		var json = format.from(data.data);
 	} catch (e) { 
 		this._error(e);
 	}
@@ -3938,6 +4232,7 @@ MM.Mouse.handleEvent = function(e) {
 			var item = MM.App.map.getItemFor(e.target);
 			if (item == MM.App.current && MM.App.editing) { return; }
 
+			document.activeElement && document.activeElement.blur(); /* blur the panel FIXME only if activeElement is in the UI? */
 			this._startDrag(e, item);
 		break;
 		
@@ -3960,8 +4255,7 @@ MM.Mouse.handleEvent = function(e) {
 }
 
 MM.Mouse._startDrag = function(e, item) {
-	e.preventDefault();
-
+	e.preventDefault(); /* no selections allowed */
 	this._port.addEventListener("mousemove", this);
 	this._port.addEventListener("mouseup", this);
 
@@ -4217,6 +4511,11 @@ MM.App = {
 			case "resize":
 				this._syncPort();
 			break;
+
+			case "beforeunload":
+				e.preventDefault();
+				return "";
+			break;
 		}
 	},
 	
@@ -4231,10 +4530,12 @@ MM.App = {
 		this.io = new MM.UI.IO();
 		this.help = new MM.UI.Help();
 
+		MM.Tip.init();
 		MM.Keyboard.init();
 		MM.Mouse.init(this._port);
 
 		window.addEventListener("resize", this);
+		window.addEventListener("beforeunload", this);
 		MM.subscribe("ui-change", this);
 		MM.subscribe("item-change", this);
 		
